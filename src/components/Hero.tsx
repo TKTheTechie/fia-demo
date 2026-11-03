@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { Component, ReactNode, Suspense, lazy, useEffect, useState } from 'react'
-import { HERO } from '../content'
+import { CLIENTS, HERO } from '../content'
 import { broker } from '../lib/broker'
 
 const HeroScene = lazy(() => import('./HeroScene'))
@@ -64,7 +64,18 @@ export default function Hero() {
           <div className="stat"><b>{s.orders.toLocaleString()}</b><span>orders through the mesh</span></div>
         </motion.div>
       </div>
-      <div className="scroll-hint">SCROLL<i /></div>
+      <motion.div className="clients" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 1.1, duration: 1 }}>
+        <div className="clients-label mono">Trusted by leading banks &amp; exchanges</div>
+        <div className="clients-window">
+          <div className="clients-track">
+            {[...CLIENTS, ...CLIENTS].map((c, i) => (
+              <div key={i} className={`client ${c.serif ? 'serif' : ''}`} title={c.name} aria-hidden={i >= CLIENTS.length}>
+                {c.logo ? <img src={c.logo} alt={c.name} /> : c.short ?? c.name}
+              </div>
+            ))}
+          </div>
+        </div>
+      </motion.div>
     </section>
   )
 }

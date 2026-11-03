@@ -56,3 +56,20 @@ export const FORM_FACTORS = [
 ]
 
 export const PROTOCOLS = ['SMF', 'MQTT', 'AMQP', 'JMS', 'REST', 'WebSocket', 'Kafka bridge', 'OpenTelemetry']
+
+// Client strip on the opening screen. Each entry renders as a styled wordmark;
+// set `logo` to a file in /public (e.g. 'logos/jpm.svg') to show an official
+// logo instead. Confirm with marketing that each name may be shown publicly.
+export type Client = { name: string; short?: string; logo?: string; serif?: boolean }
+
+export const CLIENTS: Client[] = [
+  { name: 'J.P. Morgan', serif: true },
+  { name: 'Citi' },
+  { name: 'Wells Fargo', serif: true },
+  { name: 'TMX Group' },
+  { name: 'Korea Exchange', short: 'KRX' },
+  { name: 'National Stock Exchange of India', short: 'NSE' },
+  { name: 'BSE' },
+  { name: 'RBC', serif: true },
+  { name: 'CIBC' },
+]
