@@ -142,7 +142,7 @@ export default function Blotter() {
       <div className="wrap">
         <SectionHead
           split
-          eyebrow="07 · Live blotter"
+          eyebrow="09 · Live blotter"
           title={<>Every screen, <span className="grad">streaming</span> in real time.</>}
           lede="Trader UIs subscribe straight to the mesh over WebSocket — no polling, no middle tier. Filter by desk and the subscription changes on the broker; only the events you need hit the glass."
         />

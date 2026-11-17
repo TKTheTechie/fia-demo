@@ -4,6 +4,8 @@ import Architecture from './components/Architecture'
 import Blotter from './components/Blotter'
 import FormFactors from './components/FormFactors'
 import Hero from './components/Hero'
+import KafkaBridge from './components/KafkaBridge'
+import GlobalBlotters from './components/GlobalBlotters'
 import Latency from './components/Latency'
 import Tape from './components/Tape'
 import Throughput from './components/Throughput'
@@ -21,6 +23,8 @@ const SECTIONS = [
   { id: 'wan', label: 'WAN' },
   { id: 'throughput', label: 'Throughput' },
   { id: 'hybrid', label: 'Hybrid cloud' },
+  { id: 'kafka', label: 'Kafka' },
+  { id: 'global', label: 'Global' },
   { id: 'blotter', label: 'Blotter' },
 ]
 SECTION_IDS.push(...SECTIONS.map((x) => x.id))
@@ -117,6 +121,8 @@ export default function App() {
         <WanMap />
         <Throughput />
         <FormFactors />
+        <KafkaBridge />
+        <GlobalBlotters />
         <Blotter />
       </main>
     </>

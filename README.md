@@ -14,6 +14,8 @@ order lifecycle publish onto it, and every visual subscribes to it.
 | WAN routing | World map of colo/cloud brokers; click a hub to simulate an outage |
 | Throughput | Particle firehose with a load slider |
 | Multi-form factor / hybrid | Appliance, software, cloud, edge + on-prem ↔ cloud mesh |
+| Kafka bridge | Flat Kafka market-data topics → Solace Kafka bridge → hierarchical topics → filterable WebSocket blotter |
+| Global distribution | Regional Kafka clusters bridged into the mesh; trader blotters in 6 cities each subscribe to precise streams, routed over WAN only on demand |
 | Live blotter | Animated order blotter (desk filter = topic subscription) + market watch with sparklines |
 
 ## Booth controls

@@ -23,7 +23,7 @@ export function topicMatches(sub: string, topic: string): boolean {
   return s.length === t.length
 }
 
-class Broker {
+export class Broker {
   private subs = new Map<number, { sub: string; fn: Handler<any> }>()
   private next = 1
   published = 0
