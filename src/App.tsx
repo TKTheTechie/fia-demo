@@ -1,10 +1,10 @@
 import { motion, useScroll, useSpring } from 'framer-motion'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Architecture from './components/Architecture'
 import Blotter from './components/Blotter'
 import FormFactors from './components/FormFactors'
 import Hero from './components/Hero'
-import KafkaBridge from './components/KafkaBridge'
+import Kafka from './components/Kafka'
 import GlobalBlotters from './components/GlobalBlotters'
 import Latency from './components/Latency'
 import Tape from './components/Tape'
@@ -12,24 +12,24 @@ import Throughput from './components/Throughput'
 import TopicRouting from './components/TopicRouting'
 import WanMap from './components/WanMap'
 import { useKiosk } from './lib/kiosk'
+import { resetSpeed, stepSpeed, togglePause, usePaused, useSpeed } from './lib/pause'
+import { useScenario } from './lib/scenario'
 import { useTheme } from './lib/theme'
+import type { SectionId } from './scenarios/types'
 
-const SECTION_IDS: string[] = []
-const SECTIONS = [
-  { id: 'top', label: 'Home' },
-  { id: 'flow', label: 'End-to-end' },
-  { id: 'topics', label: 'Topic routing' },
-  { id: 'latency', label: 'Latency' },
-  { id: 'wan', label: 'WAN' },
-  { id: 'throughput', label: 'Throughput' },
-  { id: 'hybrid', label: 'Hybrid cloud' },
-  { id: 'kafka', label: 'Kafka' },
-  { id: 'global', label: 'Global' },
-  { id: 'blotter', label: 'Blotter' },
-]
-SECTION_IDS.push(...SECTIONS.map((x) => x.id))
+const VIEWS: Record<SectionId, () => JSX.Element> = {
+  flow: Architecture,
+  topics: TopicRouting,
+  latency: Latency,
+  wan: WanMap,
+  throughput: Throughput,
+  hybrid: FormFactors,
+  kafka: Kafka,
+  global: GlobalBlotters,
+  blotter: Blotter,
+}
 
-function useActiveSection() {
+function useActiveSection(SECTIONS: { id: string }[]) {
   const [active, setActive] = useState('top')
   useEffect(() => {
     const io = new IntersectionObserver(
@@ -38,7 +38,7 @@ function useActiveSection() {
     )
     SECTIONS.forEach((s) => { const el = document.getElementById(s.id); if (el) io.observe(el) })
     return () => io.disconnect()
-  }, [])
+  }, [SECTIONS])
   return active
 }
 
@@ -59,8 +59,15 @@ function Logo() {
 
 export default function App() {
   const [theme, setTheme] = useTheme()
-  const kiosk = useKiosk(SECTION_IDS)
-  const active = useActiveSection()
+  const sc = useScenario()
+  const SECTIONS = useMemo(
+    () => [{ id: 'top', label: 'Home' }, ...sc.sections.map((id) => ({ id, label: sc.copy[id]?.nav ?? sc.copy[id]?.eyebrow ?? id }))],
+    [sc],
+  )
+  const paused = usePaused()
+  const speed = useSpeed()
+  const kiosk = useKiosk(useMemo(() => SECTIONS.map((x) => x.id), [SECTIONS]))
+  const active = useActiveSection(SECTIONS)
   const { scrollYProgress } = useScroll()
   const scaleX = useSpring(scrollYProgress, { stiffness: 120, damping: 30 })
 
@@ -80,6 +87,10 @@ export default function App() {
       const k = e.key.toLowerCase()
       if (k === 't') toggleTheme()
       if (k === 'k') kiosk.toggle()
+      if (k === 'p') togglePause()
+      if (e.key === ']' || e.key === '+' || e.key === '=') stepSpeed(1)
+      if (e.key === '[' || e.key === '-' || e.key === '_') stepSpeed(-1)
+      if (e.key === '\\') resetSpeed()
       if (k === 'f') fullscreen()
     }
     window.addEventListener('keydown', on)
@@ -89,6 +100,7 @@ export default function App() {
   return (
     <>
       <div className="backdrop" />
+      {paused && <div className="paused-badge mono" role="status">❚❚ PAUSED · press P to resume</div>}
       <motion.div className="kiosk-bar" style={{ scaleX, transformOrigin: '0 0', right: 0 }} />
       <nav className="nav">
         <Logo />
@@ -106,6 +118,12 @@ export default function App() {
           >
             {kiosk.on && !kiosk.paused ? '■' : '▶'}<span>{kiosk.on ? (kiosk.paused ? 'Resume tour' : 'Stop tour') : 'Booth mode'}</span>
           </button>
+          <button className={`pill-btn speed ${speed !== 1 ? 'on' : ''}`} data-speed-reset onClick={resetSpeed} title="Message rate: ] faster, [ slower, \\ reset" aria-label="Message rate">
+            {speed}×
+          </button>
+          <button className={`pill-btn ${paused ? 'on' : ''}`} data-pause-toggle onClick={togglePause} title={paused ? 'Resume message flow (P)' : 'Pause message flow (P)'} aria-label="Pause or resume message flow">
+            {paused ? '▶' : '❚❚'}
+          </button>
           <button className="pill-btn" onClick={fullscreen} title="Fullscreen (F)" aria-label="Fullscreen">⛶</button>
           <button className="pill-btn" onClick={toggleTheme} title="Toggle theme (T)" aria-label="Toggle theme">
             {theme === 'dark' ? '☀' : '☾'}
@@ -114,16 +132,11 @@ export default function App() {
       </nav>
       <main>
         <Hero />
-        <Tape />
-        <Architecture />
-        <TopicRouting />
-        <Latency />
-        <WanMap />
-        <Throughput />
-        <FormFactors />
-        <KafkaBridge />
-        <GlobalBlotters />
-        <Blotter />
+        {sc.tape !== false && <Tape />}
+        {sc.sections.map((id) => {
+          const View = VIEWS[id]
+          return <View key={id} />
+        })}
       </main>
     </>
   )

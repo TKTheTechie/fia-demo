@@ -1,11 +1,12 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { broker } from '../lib/broker'
-import { INSTRUMENTS, Tick, fmt, marketTopic } from '../lib/market'
-import { Order } from '../lib/orders'
-import { SectionHead, Reveal } from './Section'
-
-const dpOf = Object.fromEntries(INSTRUMENTS.map((i) => [i.sym, i.dp]))
+import { fmt } from '../lib/format'
+import { useScenario } from '../lib/scenario'
+import { Item, facetSubscription, lifecycleRoot } from '../lib/sim/lifecycle'
+import { feedSubscription, feedTopic, type Tick } from '../lib/sim/stream'
+import type { Column, ColumnFormat, Scenario } from '../scenarios/types'
+import { Reveal, ScenarioHead } from './Section'
 
 function Spark({ data, up }: { data: number[]; up: boolean }) {
   if (data.length < 2) return <svg className="spark" />
@@ -19,37 +20,67 @@ function Spark({ data, up }: { data: number[]; up: boolean }) {
   )
 }
 
-type Q = Tick & { dir: 0 | 1 | -1; hist: number[]; n: number }
+type Q = Tick & { dir: 0 | 1 | -1; hist: number[]; n: number; restockedAt: number }
 
-function MarketWatch() {
+function Watch() {
+  const sc = useScenario()
+  const { entities } = sc.model
+  const two = sc.watch.columns.length > 1
   const [q, setQ] = useState<Record<string, Q>>({})
   const buf = useRef<Record<string, Q>>({})
   useEffect(() => {
-    const uns = INSTRUMENTS.map((i) => broker.subscribe<Tick>(marketTopic(i), (m) => {
-      const prev = buf.current[i.sym]
+    buf.current = {}
+    const uns = entities.map((e) => broker.subscribe<Tick>(feedTopic(sc, e.id), (m) => {
+      const prev = buf.current[e.id]
       const hist = prev ? [...prev.hist, m.payload.last].slice(-40) : [m.payload.last]
-      buf.current[i.sym] = { ...m.payload, dir: prev ? (m.payload.last > prev.last ? 1 : m.payload.last < prev.last ? -1 : 0) : 0, hist, n: (prev?.n ?? 0) + 1 }
+      const restocked = prev && e.value.sawtooth && m.payload.last - prev.last > e.value.start * 0.3
+      buf.current[e.id] = { ...m.payload, dir: prev ? (m.payload.last > prev.last ? 1 : m.payload.last < prev.last ? -1 : 0) : 0, hist, n: (prev?.n ?? 0) + 1, restockedAt: restocked ? Date.now() : (prev?.restockedAt ?? 0) }
     }))
     const iv = setInterval(() => setQ({ ...buf.current }), 200)
     return () => { uns.forEach((u) => u()); clearInterval(iv) }
-  }, [])
+  }, [sc, entities])
+  const lv = sc.watch.level
   return (
     <div className="panel mw">
-      <div className="bl-h"><span className="live" />MARKET WATCH <em className="mono">md/&gt;</em></div>
+      <div className="bl-h"><span className="live" />{sc.watch.title} <em className="mono">{feedSubscription(sc)}</em></div>
       <table className="mono">
-        <thead><tr><th>SYM</th><th>BID</th><th>ASK</th><th>CHG</th><th className="hide-s">TREND</th></tr></thead>
+        <thead>
+          <tr>
+            <th>{sc.kafka.ui.idLabel}</th>{sc.watch.columns.map((c) => <th key={c}>{c}</th>)}
+            {lv ? <><th className="hide-s">LEVEL</th><th>STATUS</th></> : <th>CHG</th>}
+            <th className="hide-s">TREND</th>
+          </tr>
+        </thead>
         <tbody>
-          {INSTRUMENTS.map((i) => {
-            const x = q[i.sym]
-            if (!x) return <tr key={i.sym}><td>{i.sym}</td><td colSpan={4}>—</td></tr>
+          {entities.map((e) => {
+            const x = q[e.id]
+            const cols = sc.watch.columns.length + (lv ? 2 : 1) + 1
+            if (!x) return <tr key={e.id}><td>{e.id}</td><td colSpan={cols}>—</td></tr>
             const cls = x.dir > 0 ? 'flash-up' : x.dir < 0 ? 'flash-dn' : ''
+            const dp = e.value.decimals
+            const ratio = x.last / e.value.start
+            const state = !lv ? 'ok' : ratio < lv.critical ? 'critical' : ratio < lv.low ? 'low' : 'ok'
+            const fresh = lv && Date.now() - x.restockedAt < 4000
             return (
-              <tr key={i.sym}>
-                <td><b>{i.sym}</b><small>{i.venue}</small></td>
-                <td key={`b${x.n}`} className={cls}>{fmt(x.bid, i.dp)}</td>
-                <td key={`a${x.n}`} className={cls}>{fmt(x.ask, i.dp)}</td>
-                <td className={x.chg >= 0 ? 'up' : 'dn'}>{x.chg >= 0 ? '▲' : '▼'} {Math.abs(x.chg).toFixed(2)}%</td>
-                <td className="hide-s"><Spark data={x.hist} up={x.chg >= 0} /></td>
+              <tr key={e.id}>
+                <td><b>{e.id}</b><small>{e.origin}</small></td>
+                {two ? (
+                  <>
+                    <td key={`b${x.n}`} className={cls}>{fmt(x.bid, dp)}</td>
+                    <td key={`a${x.n}`} className={cls}>{fmt(x.ask, dp)}</td>
+                  </>
+                ) : (
+                  <td key={`v${x.n}`} className={cls}>{fmt(x.last, dp)}</td>
+                )}
+                {lv ? (
+                  <>
+                    <td className="hide-s"><div className={`inv-bar ${state}`}><i style={{ width: `${Math.min(100, (ratio / lv.capacity) * 100)}%` }} /></div></td>
+                    <td><em className={`status ${fresh ? 's-ack' : state === 'ok' ? 's-fill' : state === 'low' ? 's-part' : 's-rej'}`}>{fresh ? lv.labels.restock : lv.labels[state]}</em></td>
+                  </>
+                ) : (
+                  <td className={x.chg >= 0 ? 'up' : 'dn'}>{x.chg >= 0 ? '▲' : '▼'} {Math.abs(x.chg).toFixed(2)}%</td>
+                )}
+                <td className="hide-s"><Spark data={x.hist} up={lv ? x.last >= x.hist[0] : x.chg >= 0} /></td>
               </tr>
             )
           })}
@@ -59,77 +90,116 @@ function MarketWatch() {
   )
 }
 
-const STATUS_CLS: Record<string, string> = { NEW: 's-new', ACK: 's-ack', PARTIAL: 's-part', FILLED: 's-fill', REJECTED: 's-rej', CANCELLED: 's-rej' }
+const TONE_CLS = { new: 's-new', ack: 's-ack', partial: 's-part', done: 's-fill', bad: 's-rej' } as const
+// Relative column widths, per format. Together these reproduce the original 9-column blotter grid.
+const WEIGHT: Record<ColumnFormat, number> = { id: 1.2, side: 0.6, text: 0.8, int: 1, progress: 1.2, price: 1, status: 1 }
+const gridOf = (cols: Column[]) => cols.map((c) => `minmax(0, ${c.weight ?? WEIGHT[c.format]}fr)`).join(' ')
 
-function OrderBlotter() {
-  const [orders, setOrders] = useState<Order[]>([])
-  const [totals, setTotals] = useState({ n: 0, filled: 0, notional: 0, rej: 0 })
-  const [deskFilter, setDesk] = useState<string>('*')
-  const map = useRef(new Map<string, Order>())
+const rawOf = (it: Item, key: string): string | number => {
+  switch (key) {
+    case 'id': return it.id
+    case 'entity': return it.entity
+    case 'origin': return it.origin
+    case 'group': return it.group
+    case 'status': return it.status
+    case 'qty': return it.qty
+    case 'filled': return it.filled
+    case 'avgValue': return it.avgValue
+    default: return it.fields[key] ?? ''
+  }
+}
+
+function Cell({ sc, col, it }: { sc: Scenario; col: Column; it: Item }) {
+  const small = col.hideSmall ? 'hide-s' : undefined
+  const v = rawOf(it, col.key)
+  switch (col.format) {
+    case 'id': return <span className="muted">{v}</span>
+    case 'side': return <span className={v === 'BUY' ? 'up' : 'dn'}><b>{v}</b></span>
+    case 'int': return <span className={small}>{Number(v).toLocaleString()}</span>
+    case 'progress': {
+      const pct = Math.min(100, (it.filled / it.qty) * 100)
+      return <span className="fillbar"><i style={{ width: `${pct}%` }} />{pct.toFixed(0)}%</span>
+    }
+    case 'price': {
+      const dp = sc.model.entities.find((e) => e.id === it.entity)?.value.decimals ?? 2
+      return <span className={small}>{it.avgValue ? fmt(it.avgValue, dp) : '—'}</span>
+    }
+    case 'status': {
+      const tone = sc.lifecycle.statuses.find((s) => s.id === it.status)?.tone ?? 'new'
+      return <span><motion.em key={it.status} initial={{ scale: 1.3 }} animate={{ scale: 1 }} className={`status ${TONE_CLS[tone]}`}>{it.status}</motion.em></span>
+    }
+    default: return <span className={`txt ${small ?? ''}`}>{col.key === 'entity' ? <b>{v}</b> : v}</span>
+  }
+}
+
+function Tracker() {
+  const sc = useScenario()
+  const { blotter: bl, lifecycle: lc } = sc
+  const [items, setItems] = useState<Item[]>([])
+  const [totals, setTotals] = useState({ n: 0, done: 0, value: 0, bad: 0 })
+  const [facet, setFacet] = useState<string>('*')
+  const map = useRef(new Map<string, Item>())
   const order = useRef<string[]>([])
-  const tot = useRef({ n: 0, filled: 0, notional: 0, rej: 0 })
+  const tot = useRef({ n: 0, done: 0, value: 0, bad: 0 })
+  const tone = (status: string | undefined) => lc.statuses.find((s) => s.id === status)?.tone
+
+  const sub = facet === '*' ? lifecycleRoot(sc) : facetSubscription(sc, bl.facet, facet)
 
   useEffect(() => {
-    const sub = deskFilter === '*' ? 'trade/>' : `trade/*/*/${deskFilter}/>`
     map.current.clear(); order.current = []
-    const un = broker.subscribe<Order>(sub, (m) => {
-      const o = m.payload
-      if (!map.current.has(o.id)) {
-        order.current.unshift(o.id)
+    const un = broker.subscribe<Item>(sub, (m) => {
+      const it = m.payload
+      if (!map.current.has(it.id)) {
+        order.current.unshift(it.id)
         tot.current.n++
         if (order.current.length > 14) map.current.delete(order.current.pop()!)
       }
-      const prev = map.current.get(o.id)
-      if (o.status === 'FILLED' && prev?.status !== 'FILLED') { tot.current.filled++; tot.current.notional += o.qty * o.avgPx }
-      if (o.status === 'REJECTED' && prev?.status !== 'REJECTED') tot.current.rej++
-      map.current.set(o.id, o)
+      const prev = map.current.get(it.id)
+      if (tone(it.status) === 'done' && tone(prev?.status) !== 'done') { tot.current.done++; tot.current.value += it.qty * it.avgValue }
+      if (tone(it.status) === 'bad' && tone(prev?.status) !== 'bad') tot.current.bad++
+      map.current.set(it.id, it)
     })
     const iv = setInterval(() => {
-      setOrders(order.current.map((id) => map.current.get(id)!).filter(Boolean))
+      setItems(order.current.map((id) => map.current.get(id)!).filter(Boolean))
       setTotals({ ...tot.current })
     }, 180)
     return () => { un(); clearInterval(iv) }
-  }, [deskFilter])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sub])
+
+  const cols = bl.columns
+  const small = useMemo(() => cols.filter((c) => !c.hideSmall), [cols])
+  const vars = { ['--ob-cols' as string]: gridOf(cols), ['--ob-cols-s' as string]: gridOf(small), ['--kpis' as string]: bl.kpis.value ? 4 : 3 }
+  const money = (v: number) => `${bl.kpis.value?.prefix ?? ''}${v >= 1e9 ? `${(v / 1e9).toFixed(2)}B` : `${(v / 1e6).toFixed(1)}M`}`
 
   return (
-    <div className="panel ob">
+    <div className="panel ob" style={vars}>
       <div className="bl-h">
-        <span className="live" />ORDER BLOTTER <em className="mono">{deskFilter === '*' ? 'trade/>' : `trade/*/*/${deskFilter}/>`}</em>
+        <span className="live" />{bl.title} <em className="mono">{sub}</em>
         <div className="desk-chips">
-          {['*', 'ALGO', 'DELTA1', 'MACRO', 'FXSPOT', 'VOL'].map((d) => (
-            <button key={d} className={`chip ${deskFilter === d ? 'on' : ''}`} onClick={() => setDesk(d)}>{d === '*' ? 'ALL DESKS' : d}</button>
+          {['*', ...lc.facets[bl.facet]].map((d) => (
+            <button key={d} className={`chip ${facet === d ? 'on' : ''}`} onClick={() => setFacet(d)}>{d === '*' ? bl.allLabel : d}</button>
           ))}
         </div>
       </div>
       <div className="ob-kpis mono">
-        <div><b>{totals.n.toLocaleString()}</b><span>orders</span></div>
-        <div><b className="up">{totals.filled.toLocaleString()}</b><span>filled</span></div>
-        <div><b>${totals.notional >= 1e9 ? `${(totals.notional / 1e9).toFixed(2)}B` : `${(totals.notional / 1e6).toFixed(1)}M`}</b><span>notional</span></div>
-        <div><b className="dn">{totals.rej}</b><span>risk rejects</span></div>
+        <div><b>{totals.n.toLocaleString()}</b><span>{bl.kpis.total}</span></div>
+        <div><b className="up">{totals.done.toLocaleString()}</b><span>{bl.kpis.done}</span></div>
+        {bl.kpis.value && <div><b>{money(totals.value)}</b><span>{bl.kpis.value.label}</span></div>}
+        <div><b className="dn">{totals.bad}</b><span>{bl.kpis.bad}</span></div>
       </div>
       <div className="ob-table mono">
         <div className="ob-row ob-head">
-          <span>ORDER</span><span>SIDE</span><span>SYM</span><span className="hide-s">DESK</span><span className="hide-s">ALGO</span><span>QTY</span><span>FILLED</span><span className="hide-s">AVG PX</span><span>STATUS</span>
+          {cols.map((c) => <span key={c.key} className={c.hideSmall ? 'hide-s' : undefined}>{c.label}</span>)}
         </div>
         <AnimatePresence initial={false} mode="popLayout">
-          {orders.map((o) => {
-            const pct = Math.min(100, (o.filled / o.qty) * 100)
-            return (
-              <motion.div key={o.id} layout initial={{ opacity: 0, y: -16, backgroundColor: 'rgba(0,200,149,0.25)' }}
-                animate={{ opacity: 1, y: 0, backgroundColor: 'rgba(0,0,0,0)' }} exit={{ opacity: 0, x: 40 }}
-                transition={{ duration: 0.4 }} className="ob-row">
-                <span className="muted">{o.id}</span>
-                <span className={o.side === 'BUY' ? 'up' : 'dn'}><b>{o.side}</b></span>
-                <span><b>{o.sym}</b></span>
-                <span className="hide-s">{o.desk}</span>
-                <span className="hide-s">{o.strategy}</span>
-                <span>{o.qty.toLocaleString()}</span>
-                <span className="fillbar"><i style={{ width: `${pct}%` }} />{pct.toFixed(0)}%</span>
-                <span className="hide-s">{o.avgPx ? fmt(o.avgPx, dpOf[o.sym]) : '—'}</span>
-                <span><motion.em key={o.status} initial={{ scale: 1.3 }} animate={{ scale: 1 }} className={`status ${STATUS_CLS[o.status]}`}>{o.status}</motion.em></span>
-              </motion.div>
-            )
-          })}
+          {items.map((it) => (
+            <motion.div key={it.id} layout initial={{ opacity: 0, y: -16, backgroundColor: 'rgba(0,200,149,0.25)' }}
+              animate={{ opacity: 1, y: 0, backgroundColor: 'rgba(0,0,0,0)' }} exit={{ opacity: 0, x: 40 }}
+              transition={{ duration: 0.4 }} className="ob-row">
+              {cols.map((c) => <Cell key={c.key} sc={sc} col={c} it={it} />)}
+            </motion.div>
+          ))}
         </AnimatePresence>
       </div>
     </div>
@@ -140,16 +210,11 @@ export default function Blotter() {
   return (
     <section id="blotter" className="fit">
       <div className="wrap">
-        <SectionHead
-          split
-          eyebrow="09 · Live blotter"
-          title={<>Every screen, <span className="grad">streaming</span> in real time.</>}
-          lede="Trader UIs subscribe straight to the mesh over WebSocket — no polling, no middle tier. Filter by desk and the subscription changes on the broker; only the events you need hit the glass."
-        />
+        <ScenarioHead id="blotter" split />
         <Reveal delay={0.1}>
           <div className="bl-grid">
-            <OrderBlotter />
-            <MarketWatch />
+            <Tracker />
+            <Watch />
           </div>
         </Reveal>
       </div>
