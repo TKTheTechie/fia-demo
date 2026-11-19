@@ -1,7 +1,8 @@
 import { motion } from 'framer-motion'
 import { MouseEvent, useState } from 'react'
 import { FORM_FACTORS, PROTOCOLS } from '../content'
-import { SectionHead, Reveal } from './Section'
+import { useScenario } from '../lib/scenario'
+import { ScenarioHead, Reveal } from './Section'
 
 function Icon({ k }: { k: string }) {
   const s = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.6, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
@@ -35,15 +36,11 @@ function TiltCard({ children }: { children: React.ReactNode }) {
 }
 
 export default function FormFactors() {
+  const { hybrid } = useScenario()
   return (
     <section id="hybrid" className="fit">
       <div className="wrap">
-        <SectionHead
-          split
-          eyebrow="06 · Multi-form factor · Hybrid cloud"
-          title={<>Same broker. <span className="grad">Anywhere</span> you run.</>}
-          lede="Hardware in the colo, software in your data center, managed services in every major cloud — all speaking the same protocols, the same topics, managed as one mesh. Migrate workloads to the cloud at your own pace without rewriting a line of messaging code."
-        />
+        <ScenarioHead id="hybrid" split />
         <div className="ff-grid">
           {FORM_FACTORS.map((f, i) => (
             <Reveal key={f.key} delay={i * 0.08}>
@@ -61,7 +58,7 @@ export default function FormFactors() {
           <div className="hybrid panel">
             <div className="hy-col">
               <div className="hy-h mono">ON-PREM / COLO</div>
-              {['Matching-engine colo', 'Primary DC', 'DR site'].map((x) => <div key={x} className="hy-box">{x}</div>)}
+              {hybrid.onPrem.map((x) => <div key={x} className="hy-box">{x}</div>)}
             </div>
             <div className="hy-mid">
               <svg viewBox="0 0 400 220" preserveAspectRatio="none">
@@ -73,7 +70,7 @@ export default function FormFactors() {
             </div>
             <div className="hy-col">
               <div className="hy-h mono">PUBLIC CLOUD</div>
-              {['AWS', 'Microsoft Azure', 'Google Cloud'].map((x) => <div key={x} className="hy-box cloud">{x}</div>)}
+              {hybrid.cloud.map((x) => <div key={x} className="hy-box cloud">{x}</div>)}
             </div>
           </div>
           <div className="protocols">

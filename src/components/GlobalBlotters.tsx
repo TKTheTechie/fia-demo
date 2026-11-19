@@ -5,9 +5,12 @@ import { feature } from 'topojson-client'
 import type { GeometryCollection, Topology } from 'topojson-specification'
 import land110 from 'world-atlas/land-110m.json'
 import { topicMatches } from '../lib/broker'
-import { HUBS, LINKS } from '../lib/hubs'
-import { INSTRUMENTS, Instrument, fmt } from '../lib/market'
-import { SectionHead, Reveal } from './Section'
+import { fmt } from '../lib/format'
+import { isPaused, scaled } from '../lib/pause'
+import { useScenario } from '../lib/scenario'
+import { KRec, makeRecord, pick, pickTopic } from '../lib/sim/records'
+import type { Scenario } from '../scenarios/types'
+import { ScenarioHead, Reveal } from './Section'
 
 // Global version of the Kafka bridge story.
 // Regional Kafka clusters (Chicago, New Jersey, London) carry flat market-data
@@ -17,33 +20,18 @@ import { SectionHead, Reveal } from './Section'
 // Every dot on the map is one event heading to one desk; it lands in that
 // desk's blotter when it arrives.
 
-type Kind = 'quote' | 'trade'
-type Ev = { id: number; sym: string; asset: Instrument['asset']; venue: string; kind: Kind; px: number; bid: number; ask: number; dp: number; topic: string; src: string }
-type Row = Ev & { ms: number; key: number }
+type Row = KRec & { src: string; ms: number; rk: number }
 
-// Market venue → hub whose Kafka cluster ingests it
-const INGEST: Record<string, string> = { CME: 'CHI', CBOT: 'CHI', NYMEX: 'NY4', COMEX: 'NY4', NASDAQ: 'NY4', NYSE: 'NY4', EBS: 'LD4', LSEG: 'LD4' }
-const INGEST_HUBS = ['CHI', 'NY4', 'LD4']
-const BADGE: Record<string, [number, number]> = { CHI: [-34, -8], NY4: [-8, 12], LD4: [10, -28] }
-
-const DESKS = [
-  { id: 'nyc', hub: 'NY4', city: 'New York', desk: 'Equities', subs: ['md/equities/>', 'md/equities/NASDAQ/>', 'md/*/*/NVDA/>'] },
-  { id: 'chi', hub: 'CHI', city: 'Chicago', desk: 'Futures', subs: ['md/futures/CME/>', 'md/futures/>', 'md/*/CME/*/trade'] },
-  { id: 'ldn', hub: 'LD4', city: 'London', desk: 'FX spot', subs: ['md/fx/>', 'md/fx/*/GBPUSD/>', 'md/fx/*/*/trade'] },
-  { id: 'fra', hub: 'FR2', city: 'Frankfurt', desk: 'Rates', subs: ['md/rates/>', 'md/rates/*/ZN/quote', 'md/futures/COMEX/GC/>'] },
-  { id: 'sgp', hub: 'SG1', city: 'Singapore', desk: 'Macro', subs: ['md/*/*/*/trade', 'md/futures/*/CL/>', 'md/crypto/>'] },
-  { id: 'tyo', hub: 'TY3', city: 'Tokyo', desk: 'JPY & index', subs: ['md/fx/*/USDJPY/>', 'md/futures/CME/NQ/>', 'md/*/*/USD*/>'] },
-]
 const ROWS = 5
 
-const ASSET_CLS: Record<Instrument['asset'], string> = { equities: 'a-eq', futures: 'a-fut', fx: 'a-fx', rates: 'a-rt', crypto: 'a-cx' }
+// The kafka.ui chips (max 5) are coloured by position; the classes keep their original names.
+const CHIP_CLS = ['a-eq', 'a-fut', 'a-fx', 'a-rt', 'a-cx']
 
 const W = 1200, H = 600
-const hubById = Object.fromEntries(HUBS.map((h) => [h.id, h]))
 const linkId = (a: string, b: string) => (a < b ? `${a}-${b}` : `${b}-${a}`)
 
 // shortest hop path over the mesh links
-function route(from: string, to: string): string[] {
+function route(LINKS: [string, string][], from: string, to: string): string[] {
   const prev = new Map<string, string>([[from, '']])
   const q = [from]
   while (q.length) {
@@ -60,7 +48,7 @@ function route(from: string, to: string): string[] {
 }
 
 // one-way fibre latency along the route (~200 km per ms, x1.3 for real-world paths)
-function fibreMs(path: string[]) {
+function fibreMs(hubById: Record<string, { lon: number; lat: number }>, path: string[]) {
   let km = 0
   for (let i = 1; i < path.length; i++) {
     const a = hubById[path[i - 1]], b = hubById[path[i]]
@@ -70,6 +58,13 @@ function fibreMs(path: string[]) {
 }
 
 export default function GlobalBlotters() {
+  const sc = useScenario()
+  const { hubs: HUBS, links: LINKS, ingest: INGEST } = sc.sites
+  const hubById = useMemo(() => Object.fromEntries(HUBS.map((h) => [h.id, h])), [HUBS])
+  const INGEST_HUBS = useMemo(() => [...new Set(Object.values(INGEST))], [INGEST])
+  const BADGE = sc.sites.kafkaBadge ?? {}
+  const DESKS = useMemo(() => sc.personas.map((p) => ({ id: p.id, hub: p.site, city: p.city, desk: p.role, subs: p.subs })), [sc])
+  const chipOf = (r: KRec) => Math.max(0, sc.kafka.ui.chips.findIndex((c) => c.id === r.headers[sc.kafka.ui.chipHeader]))
   const sectionRef = useRef<HTMLElement>(null)
   const inView = useInView(sectionRef, { margin: '-80px' })
 
@@ -95,13 +90,13 @@ export default function GlobalBlotters() {
       m.set(`${b}-${a}`, [...lifted].reverse())
     }
     return m
-  }, [proj])
+  }, [proj, LINKS, hubById])
 
   // precomputed routes from every ingest hub to every desk
   const routes = useMemo(() => {
     const m = new Map<string, { hops: string[]; links: string[]; pts: [number, number][]; cum: number[]; ms: number }>()
     for (const s of INGEST_HUBS) for (const d of DESKS) {
-      const hops = route(s, d.hub)
+      const hops = route(LINKS, s, d.hub)
       const pts: [number, number][] = []
       const links: string[] = []
       for (let i = 1; i < hops.length; i++) {
@@ -111,10 +106,10 @@ export default function GlobalBlotters() {
       }
       const cum = [0]
       for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]))
-      m.set(`${s}>${d.id}`, { hops, links, pts, cum, ms: fibreMs(hops) })
+      m.set(`${s}>${d.id}`, { hops, links, pts, cum, ms: fibreMs(hubById, hops) })
     }
     return m
-  }, [arcs])
+  }, [arcs, LINKS, DESKS, INGEST_HUBS, hubById])
 
   const [subIdx, setSubIdx] = useState<number[]>(() => DESKS.map(() => 0))
   const subsRef = useRef<string[]>([])
@@ -146,30 +141,26 @@ export default function GlobalBlotters() {
     let id = 0, key = 0, raf = 0, timer = 0, last = performance.now()
 
     const produce = () => {
+      if (isPaused()) { timer = window.setTimeout(produce, 200); return }
       const n = 2 + Math.floor(Math.random() * 2)
       for (let k = 0; k < n; k++) {
-        const i = INSTRUMENTS[Math.floor(Math.random() * INSTRUMENTS.length)]
-        const kind: Kind = Math.random() < 0.6 ? 'quote' : 'trade'
-        const px = i.px * (1 + (Math.random() - 0.5) * i.vol)
-        const spread = px * 0.00005 + Math.pow(10, -i.dp)
-        const ev: Ev = {
-          id: id++, sym: i.sym, asset: i.asset, venue: i.venue, kind, px, bid: px - spread / 2, ask: px + spread / 2, dp: i.dp,
-          topic: `md/${i.asset}/${i.venue}/${i.sym}/${kind}`, src: INGEST[i.venue],
-        }
+        const { topic: kt, index } = pickTopic(sc)
+        const base = makeRecord(sc, pick(sc.model.entities), kt, index, id++)
+        const ev: Row = { ...base, src: INGEST[base.origin], ms: 0, rk: 0 }
         counts.current.ingested++
         counts.current.flood += HUBS.length - 1 // naive replication: every event to every site
         const used = new Set<string>()
         DESKS.forEach((d, di) => {
-          if (!topicMatches(subsRef.current[di], ev.topic)) return
+          if (!topicMatches(subsRef.current[di], ev.solaceTopic)) return
           const r = routes.get(`${ev.src}>${d.id}`)!
           r.links.forEach((l) => used.add(l))
-          const row: Row = { ...ev, ms: r.ms, key: key++ }
+          const row: Row = { ...ev, ms: r.ms, rk: key++ }
           const local = r.pts.length === 0
           let el: SVGCircleElement | null = null
           if (!local && layer.current && dots.length < 90) {
             el = document.createElementNS(ns, 'circle')
             el.setAttribute('r', '3.4')
-            el.setAttribute('class', `gd-dot ${ASSET_CLS[ev.asset]}${focusRef.current && focusRef.current !== d.id ? ' dim' : ''}`)
+            el.setAttribute('class', `gd-dot ${CHIP_CLS[chipOf(ev)]}${focusRef.current && focusRef.current !== d.id ? ' dim' : ''}`)
             el.setAttribute('cx', String(r.pts[0][0])); el.setAttribute('cy', String(r.pts[0][1]))
             layer.current.appendChild(el)
           }
@@ -180,11 +171,11 @@ export default function GlobalBlotters() {
         used.forEach((l) => linkSeen.current.set(l, now))
         counts.current.hops += used.size
       }
-      timer = window.setTimeout(produce, 380 + Math.random() * 320)
+      timer = window.setTimeout(produce, scaled(380 + Math.random() * 320))
     }
 
     const tick = (now: number) => {
-      const dt = Math.min(64, now - last); last = now
+      const dt = isPaused() ? 0 : Math.min(64, now - last); last = now
       for (let i = dots.length - 1; i >= 0; i--) {
         const d = dots[i]
         d.t += dt
@@ -192,7 +183,7 @@ export default function GlobalBlotters() {
         if (k >= 1) {
           d.el?.remove(); dots.splice(i, 1)
           counts.current.delivered++
-          deskBuf.current[d.desk] = [{ ...d.row, key: d.row.key }, ...deskBuf.current[d.desk]].slice(0, ROWS)
+          deskBuf.current[d.desk] = [{ ...d.row }, ...deskBuf.current[d.desk]].slice(0, ROWS)
           continue
         }
         if (d.el && d.r) {
@@ -219,24 +210,19 @@ export default function GlobalBlotters() {
     produce()
     raf = requestAnimationFrame(tick)
     return () => { clearTimeout(timer); cancelAnimationFrame(raf); clearInterval(ui); dots.forEach((d) => d.el?.remove()) }
-  }, [inView, routes])
+  }, [inView, routes, sc, DESKS, HUBS, INGEST])
 
   const focusLinks = useMemo(() => {
     if (!focus) return null
     const s = new Set<string>()
     INGEST_HUBS.forEach((h) => routes.get(`${h}>${focus}`)!.links.forEach((l) => s.add(l)))
     return s
-  }, [focus, routes])
+  }, [focus, routes, INGEST_HUBS])
 
   return (
     <section id="global" className="fit" ref={sectionRef}>
       <div className="wrap">
-        <SectionHead
-          split
-          eyebrow="08 · Global distribution"
-          title={<>Every desk, every region, <span className="grad">its own stream</span>.</>}
-          lede="Regional Kafka clusters feed the mesh through the Kafka bridge. Blotters in New York, London, Frankfurt, Singapore and Tokyo each subscribe to exactly what they trade — and the mesh only sends an event across a WAN link when someone on the far side asked for it. Tap a desk's subscription to change it."
-        />
+        <ScenarioHead id="global" split />
         <Reveal delay={0.1}>
           <div className="gd-grid">
             <div className="gd-left">
@@ -266,14 +252,14 @@ export default function GlobalBlotters() {
                         {desk && <circle r="16" className="wan-ring" />}
                         <circle r={desk ? 6.5 : 4} className="gd-core" />
                         {ingest && (
-                          <g transform={`translate(${BADGE[h.id][0]},${BADGE[h.id][1]})`} className="gd-kafka">
+                          <g transform={`translate(${(BADGE[h.id] ?? [-8, -28])[0]},${(BADGE[h.id] ?? [-8, -28])[1]})`} className="gd-kafka">
                             <rect width="16" height="16" rx="4" /><text x="8" y="12">K</text>
                           </g>
                         )}
                         {desk && (
                           <>
                             <text x={lx} y={ly} textAnchor={right ? 'start' : 'end'} className="wan-name">{desk.city}</text>
-                            <text x={lx} y={ly + 14} textAnchor={right ? 'start' : 'end'} className="wan-dc">{desk.desk} desk</text>
+                            <text x={lx} y={ly + 14} textAnchor={right ? 'start' : 'end'} className="wan-dc">{sc.consumerNoun ? `${desk.desk} ${sc.consumerNoun}` : desk.desk}</text>
                           </>
                         )}
                       </g>
@@ -281,8 +267,7 @@ export default function GlobalBlotters() {
                   })}
                 </svg>
                 <div className="gd-legend mono">
-                  <span><i className="a-eq" />Equities</span><span><i className="a-fut" />Futures</span><span><i className="a-fx" />FX</span>
-                  <span><i className="a-rt" />Rates</span><span><i className="a-cx" />Crypto</span>
+                  {sc.kafka.ui.chips.map((c, i) => <span key={c.id}><i className={CHIP_CLS[i]} />{c.label}</span>)}
                   <span className="gd-k"><b>K</b>Kafka + bridge</span>
                 </div>
               </div>
@@ -309,12 +294,12 @@ export default function GlobalBlotters() {
                   <div className="gd-rows mono">
                     <AnimatePresence initial={false} mode="popLayout">
                       {rows[d.id].map((r) => (
-                        <motion.div key={r.key} layout initial={{ opacity: 0, y: -10, backgroundColor: 'rgba(42,183,255,0.2)' }}
+                        <motion.div key={r.rk} layout initial={{ opacity: 0, y: -10, backgroundColor: 'rgba(42,183,255,0.2)' }}
                           animate={{ opacity: 1, y: 0, backgroundColor: 'rgba(0,0,0,0)' }} exit={{ opacity: 0 }}
                           transition={{ duration: 0.8 }} className="gd-row">
-                          <span className={`gd-tag ${ASSET_CLS[r.asset]}`}>{r.kind === 'trade' ? 'T' : 'Q'}</span>
-                          <b>{r.sym}</b>
-                          <span className="gd-px">{r.kind === 'trade' ? fmt(r.px, r.dp) : fmt(r.bid, r.dp)}</span>
+                          <span className={`gd-tag ${CHIP_CLS[chipOf(r)]}`}>{r.kind[0].toUpperCase()}</span>
+                          <b>{r.entityId}</b>
+                          <span className="gd-px">{headline(sc, r)}</span>
                           <span className="muted gd-lat">{r.src === d.hub ? 'local' : `${r.src} ${r.ms.toFixed(0)}ms`}</span>
                         </motion.div>
                       ))}
@@ -329,4 +314,12 @@ export default function GlobalBlotters() {
       </div>
     </section>
   )
+}
+
+/** One compact figure for a desk row, following the Kafka topic's `render`. */
+function headline(sc: Scenario, r: KRec) {
+  const render = sc.kafka.topics[r.kindIndex].render ?? 'value'
+  if (render === 'bidask') return fmt(r.bid, r.dp)
+  if (render === 'delta') return `${r.delta >= 0 ? '+' : '−'}${Math.abs(r.delta).toLocaleString()}`
+  return fmt(r.value, r.dp)
 }

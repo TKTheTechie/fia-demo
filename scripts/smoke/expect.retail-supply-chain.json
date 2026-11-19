@@ -1,0 +1,189 @@
+{
+  "scenario": "retail-supply-chain",
+  "sections": [
+    "top",
+    "flow",
+    "topics",
+    "wan",
+    "throughput",
+    "hybrid",
+    "kafka",
+    "global",
+    "blotter"
+  ],
+  "counts": {
+    "page": {
+      ".nav-links a": 8,
+      ".tape-item": 0,
+      "section.fit": 8
+    },
+    "top": {
+      "h1": 1,
+      ".hero-stats .stat": 3
+    },
+    "flow": {
+      ".arch-node": 12
+    },
+    "topics": {
+      ".presets .chip": 7
+    },
+    "wan": {
+      ".wan-hub": 12,
+      ".wan-arc": 11
+    },
+    "throughput": {
+      ".tp-slider input": 1,
+      ".tp-tags .chip": 5
+    },
+    "hybrid": {
+      ".ff-card": 4,
+      ".proto": 16
+    },
+    "kafka": {
+      ".kb-topic": 2,
+      ".kb-part": 12
+    },
+    "global": {
+      ".gd-desk": 6,
+      ".gd-hub": 12,
+      ".gd-hub.desk": 6,
+      ".gd-arc": 11
+    },
+    "blotter": {
+      ".mw tbody tr": 18,
+      ".desk-chips .chip": 5
+    }
+  },
+  "soft": {
+    "top": {
+      ".hero-canvas canvas": 1
+    }
+  },
+  "live": {
+    "top": [
+      {
+        "sel": ".hero-stats .stat:nth-child(1) b",
+        "minNumber": 1,
+        "what": "events/sec on this page"
+      },
+      {
+        "sel": ".hero-stats .stat:nth-child(3) b",
+        "minNumber": 1,
+        "what": "orders through the mesh"
+      }
+    ],
+    "flow": [
+      {
+        "sel": ".arch-log-row",
+        "minCount": 3,
+        "what": "live topic log"
+      },
+      {
+        "sel": ".arch-svg circle[filter]",
+        "minCount": 1,
+        "what": "particles on the bus"
+      }
+    ],
+    "topics": [
+      {
+        "sel": ".topic-stats > div:nth-child(1) b",
+        "minNumber": 10,
+        "what": "events seen"
+      },
+      {
+        "sel": ".srow.hit",
+        "minCount": 1,
+        "what": "delivered rows for the default subscription"
+      }
+    ],
+    "wan": [
+      {
+        "sel": ".wan-hud > div:nth-child(2) b",
+        "minNumber": 1,
+        "what": "events across WAN"
+      }
+    ],
+    "throughput": [
+      {
+        "sel": ".tp-count span",
+        "minNumber": 1000,
+        "what": "msgs/sec counter"
+      }
+    ],
+    "kafka": [
+      {
+        "sel": ".kb-row:not(.kb-head)",
+        "minCount": 1,
+        "what": "blotter rows"
+      },
+      {
+        "sel": ".kb-kpis div:nth-child(1) b",
+        "minNumber": 1,
+        "what": "records on Kafka"
+      },
+      {
+        "sel": ".kb-map",
+        "minCount": 1,
+        "what": "bridge mappings"
+      }
+    ],
+    "global": [
+      {
+        "sel": ".gd-row",
+        "minCount": 1,
+        "what": "desk rows"
+      },
+      {
+        "sel": ".gd-stats div:nth-child(2) b",
+        "minNumber": 1,
+        "what": "events delivered"
+      }
+    ],
+    "blotter": [
+      {
+        "sel": ".ob-row:not(.ob-head)",
+        "minCount": 1,
+        "what": "order rows"
+      },
+      {
+        "sel": ".mw tbody td[colspan]",
+        "maxCount": 0,
+        "what": "every SKU has a level"
+      },
+      {
+        "sel": ".mw .inv-bar",
+        "minCount": 18,
+        "what": "inventory level bars"
+      }
+    ]
+  },
+  "interact": {
+    "topicRouting": {
+      "sub": "retail/stock/>",
+      "everyDeliveredContains": "retail/stock/"
+    },
+    "kafka": {
+      "chip": "ELECTRONICS",
+      "expectSub": "retail/stock/*/*/electronics/*/*",
+      "allowedVenues": [
+        "NYC-01",
+        "CHI-03",
+        "LAX-05",
+        "BER-08"
+      ],
+      "keyChip": "store",
+      "topics": 2
+    },
+    "throughput": {
+      "slider": 20,
+      "expectApprox": 2400000,
+      "tolerance": 0.08
+    },
+    "blotter": {
+      "chip": "web",
+      "expectSub": "retail/order/*/*/web/>",
+      "deskColumn": 2
+    }
+  },
+  "ignoreConsole": []
+}

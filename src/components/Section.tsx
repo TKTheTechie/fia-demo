@@ -1,5 +1,8 @@
 import { motion } from 'framer-motion'
 import { ReactNode } from 'react'
+import { renderRich } from '../lib/rich'
+import { sectionNumber, useScenario } from '../lib/scenario'
+import type { SectionId } from '../scenarios/types'
 
 export function Reveal({ children, delay = 0, y = 30 }: { children: ReactNode; delay?: number; y?: number }) {
   return (
@@ -34,4 +37,12 @@ export function SectionHead({ eyebrow, title, lede, split }: { eyebrow: string; 
       {lede && <p className="lede">{lede}</p>}
     </Reveal>
   )
+}
+
+/** Section heading driven by the scenario's copy (eyebrow number follows the section's position). */
+export function ScenarioHead({ id, split }: { id: SectionId; split?: boolean }) {
+  const sc = useScenario()
+  const c = sc.copy[id]
+  if (!c) return null
+  return <SectionHead split={split} eyebrow={`${sectionNumber(sc, id)} · ${c.eyebrow}`} title={renderRich(c.title)} lede={c.lede && renderRich(c.lede)} />
 }

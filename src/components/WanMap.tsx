@@ -3,12 +3,18 @@ import { feature } from 'topojson-client'
 import type { Topology, GeometryCollection } from 'topojson-specification'
 import land110 from 'world-atlas/land-110m.json'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { HUBS, Hub, LINKS } from '../lib/hubs'
-import { SectionHead, Reveal } from './Section'
+import { isPaused } from '../lib/pause'
+import { useScenario } from '../lib/scenario'
+import type { Hub } from '../scenarios/types'
+import { ScenarioHead, Reveal } from './Section'
 
 const W = 1200, H = 600
+const KIND_LABEL = { colo: 'Colo', cloud: 'Cloud', dc: 'Data center', edge: 'Edge' }
 
 export default function WanMap() {
+  const sc = useScenario()
+  const { hubs: HUBS, links: LINKS } = sc.sites
+  const kinds = (['colo', 'cloud', 'dc', 'edge'] as const).filter((k) => HUBS.some((h) => h.kind === k))
   const proj = useMemo(() => geoNaturalEarth1().scale(205).translate([W / 2 - 10, H / 2 + 5]), [])
   const path = useMemo(() => geoPath(proj), [proj])
   const landD = useMemo(() => {
@@ -16,7 +22,7 @@ export default function WanMap() {
     return path(feature(topo, topo.objects.land)) || ''
   }, [path])
   const gratD = useMemo(() => path(geoGraticule10()) || '', [path])
-  const hub = useMemo(() => Object.fromEntries(HUBS.map((h) => [h.id, h])), [])
+  const hub = useMemo(() => Object.fromEntries(HUBS.map((h) => [h.id, h])), [HUBS])
   const pt = (h: Hub) => proj([h.lon, h.lat])!
   const arcs = useMemo(
     () => LINKS.map(([a, b]) => {
@@ -29,7 +35,7 @@ export default function WanMap() {
       const d = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${(y - Math.sin((i / 47) * Math.PI) * lift).toFixed(1)}`).join('')
       return { id: `${a}-${b}`, a, b, d }
     }),
-    [hub, proj],
+    [hub, proj, LINKS],
   )
 
   const [failed, setFailed] = useState<string | null>(null)
@@ -45,7 +51,7 @@ export default function WanMap() {
     const ps: P[] = []
     let raf = 0, last = performance.now(), acc = 0, msgs = 0, lastUi = 0
     const tick = (now: number) => {
-      const dt = now - last; last = now; acc += dt
+      const dt = isPaused() ? 0 : now - last; last = now; acc += dt
       while (acc > 70) {
         acc -= 70
         const live = arcs.filter((a) => a.a !== failedRef.current && a.b !== failedRef.current)
@@ -76,12 +82,7 @@ export default function WanMap() {
   return (
     <section id="wan" className="fit">
       <div className="wrap">
-        <SectionHead
-          split
-          eyebrow="04 · WAN routing"
-          title={<>Chicago to Tokyo, <span className="grad">one namespace</span>.</>}
-          lede="Brokers in every colo, data center and cloud region link into a single event mesh. Subscriptions propagate automatically, so an app in Singapore subscribes to CME data exactly as it would in Aurora — and the mesh only sends across the WAN what someone actually asked for. Click a hub to simulate an outage."
-        />
+        <ScenarioHead id="wan" split />
         <Reveal delay={0.1}>
           <div className="panel wan">
             <svg viewBox={`0 0 ${W} ${H}`} className="wan-svg">
@@ -114,7 +115,9 @@ export default function WanMap() {
               <div><b>{HUBS.length - (failed ? 1 : 0)}</b><span>brokers online</span></div>
               <div><b>{stats.msgs.toLocaleString()}</b><span>events across WAN</span></div>
               <div><b className={failed ? 'dn' : 'up'}>{failed ? 'DEGRADED' : 'HEALTHY'}</b><span>{failed ? 'mesh re-routes via peers' : 'all links active'}</span></div>
-              <div className="wan-legend"><i className="colo" />Colo <i className="cloud" />Cloud <i className="dc" />Data center</div>
+              <div className="wan-legend">
+                {kinds.map((k) => <span key={k}><i className={k} />{sc.sites.kindLabels?.[k] ?? KIND_LABEL[k]} </span>)}
+              </div>
             </div>
           </div>
         </Reveal>
