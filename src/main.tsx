@@ -5,14 +5,20 @@ import '@fontsource/jetbrains-mono/400.css'
 import '@fontsource/jetbrains-mono/700.css'
 import './styles.css'
 import App from './App'
-import { startMarket } from './lib/market'
-import { startOrders } from './lib/orders'
+import { ScenarioContext, resolveScenario } from './lib/scenario'
+import { startLifecycle } from './lib/sim/lifecycle'
+import { startStream } from './lib/sim/stream'
 
-startMarket()
-startOrders()
+// One scenario per page load, chosen with ?scenario=<id> (default: the first registered).
+const scenario = resolveScenario(location.search)
+document.documentElement.dataset.scenario = scenario.id
+startStream(scenario)
+startLifecycle(scenario)
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <ScenarioContext.Provider value={scenario}>
+      <App />
+    </ScenarioContext.Provider>
   </React.StrictMode>,
 )

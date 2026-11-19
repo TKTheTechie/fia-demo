@@ -1,8 +1,14 @@
 import { AnimatePresence, motion, useInView } from 'framer-motion'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Broker } from '../lib/broker'
-import { INSTRUMENTS, Instrument, fmt } from '../lib/market'
-import { SectionHead, Reveal } from './Section'
+import { fmt } from '../lib/format'
+import { isPaused, scaled } from '../lib/pause'
+import { useScenario } from '../lib/scenario'
+import { KRec, kindOf, makeRecord, pick, pickTopic, topicPrefix } from '../lib/sim/records'
+import { feedSubscription } from '../lib/sim/stream'
+import type { FieldRef, KafkaTopic, Scenario } from '../scenarios/types'
+import { renderRich } from '../lib/rich'
+import { Reveal } from './Section'
 
 // Kafka → Solace → trader UI.
 // A simulated Kafka cluster appends market-data records to a few *flat* topics
@@ -13,35 +19,40 @@ import { SectionHead, Reveal } from './Section'
 // blotter then subscribes to exactly the slice it wants and the broker does the
 // filtering. Runs on its own bus so it doesn't double the page feed.
 
-type Kind = 'quote' | 'trade'
-type KHeaders = { asset: Instrument['asset']; venue: string; sym: string }
-type KRec = {
-  id: number; topic: string; part: number; offset: number; headers: KHeaders
-  sym: string; asset: Instrument['asset']; venue: string; kind: Kind
-  bid: number; ask: number; px: number; size: number; dp: number; ts: number
-}
-
-const KTOPICS = [
-  { name: 'mktdata.quote', parts: 7 },
-  { name: 'mktdata.trade', parts: 7 },
-]
 const LOG_LEN = 5
+const KIND_CLS = ['s-new', 's-part', 's-ack']
 
-const kafkaTopicFor = (kind: Kind) => `mktdata.${kind}`
-const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7)
-// The bridge's whole view of a record: Kafka topic name + headers. No payload access.
-const solaceTopic = (kafkaTopic: string, h: KHeaders) =>
-  `md/${h.asset}/${h.venue}/${h.sym}/${kafkaTopic.split('.').pop()}`
+/** How a record's headline value is shown, per the Kafka topic's `render`. */
+export function Value({ r, render = 'value' }: { r: KRec; render?: 'bidask' | 'value' | 'delta' }) {
+  if (render === 'bidask') return <>{fmt(r.bid, r.dp)} <i className="muted">/</i> {fmt(r.ask, r.dp)}</>
+  if (render === 'delta') return <span className={r.delta >= 0 ? 'up' : 'dn'}>{r.delta >= 0 ? '+' : '−'}{Math.abs(r.delta).toLocaleString()}</span>
+  return <>{fmt(r.value, r.dp)}</>
+}
 
 const bus = new Broker()
 
 type LogView = Record<string, { offset: number; parts: { id: number; key: string }[][] }>
 type MapRow = { id: number; from: string; hdr: string; to: string }
-const emptyLogs = (): LogView =>
-  Object.fromEntries(KTOPICS.map((t) => [t.name, { offset: 0, parts: Array.from({ length: t.parts }, () => []) }]))
+const emptyLogs = (topics: KafkaTopic[]): LogView =>
+  Object.fromEntries(topics.map((t) => [t.name, { offset: 0, parts: Array.from({ length: t.partitions }, () => []) }]))
+const MAX_PARTS = 12
 
-const ASSETS = ['*', 'equities', 'futures', 'fx', 'rates', 'crypto'] as const
-const KINDS = ['*', 'quote', 'trade'] as const
+/** The filter subscription: each bridge segment becomes a literal, a chip/text filter, or '*'. */
+function subscriptionFor(sc: Scenario, chip: string, kind: string, idText: string) {
+  const ui = sc.kafka.ui
+  if (chip === '*' && kind === '*' && idText === '*') return feedSubscription(sc)
+  return sc.kafka.bridge.segments
+    .map((seg) => ('literal' in seg ? seg.literal : 'header' in seg ? (seg.header === ui.chipHeader ? chip : seg.header === ui.idHeader ? idText : '*') : kind))
+    .join('/')
+}
+
+/** Load imbalance across a topic's partitions, for the cluster view. */
+function skew(c?: number[]) {
+  const total = c?.reduce((a, b) => a + b, 0) ?? 0
+  if (!c || total < 10) return ''
+  const top = c.indexOf(Math.max(...c))
+  return `busiest P${top} ${Math.round((c[top] / total) * 100)}%`
+}
 
 const clock = (ts: number) => {
   const d = new Date(ts)
@@ -49,65 +60,85 @@ const clock = (ts: number) => {
 }
 
 export default function KafkaBridge() {
-  const ref = useRef<HTMLElement>(null)
+  const sc = useScenario()
+  const ui = sc.kafka.ui
+  // Partition count and record key are tunable live; the scenario's values are the defaults.
+  const base = sc.kafka.topics
+  const [partsDelta, setParts] = useState(0)
+  const [keyOverride, setKey] = useState<FieldRef | null>(null)
+  const topics = useMemo(
+    () => base.map((t) => ({ ...t, partitions: Math.min(MAX_PARTS, Math.max(1, t.partitions + partsDelta)), keyBy: keyOverride ?? t.keyBy })),
+    [base, partsDelta, keyOverride],
+  )
+  // Keys on offer: the first topic's headers (each maps to an entity field), e.g. sku / store / category / region.
+  const keyOptions = Object.entries(base[0].headers).map(([header, field]) => ({ header, field }))
+  const keyField = keyOverride ?? base[0].keyBy
+  const keyName = keyOptions.find((o) => o.field === keyField)?.header ?? String(keyField)
+  const partCount = topics[0].partitions
+  const canShrink = topics.some((t) => t.partitions > 1)
+  const canGrow = topics.some((t) => t.partitions < MAX_PARTS)
+  const totalRows = topics.reduce((a, t) => a + t.partitions, 0)
+  const prefix = topicPrefix(sc)
+  const kinds = ['*', ...topics.map((t) => kindOf(sc, t.name))]
+  const ref = useRef<HTMLDivElement>(null)
   const inView = useInView(ref, { margin: '-80px' })
 
-  const [logs, setLogs] = useState<LogView>(emptyLogs)
+  const [logs, setLogs] = useState<LogView>(() => emptyLogs(topics))
   const [maps, setMaps] = useState<MapRow[]>([])
   const [rows, setRows] = useState<KRec[]>([])
   const [rate, setRate] = useState(0)
   const [stats, setStats] = useState({ kafka: 0, delivered: 0 })
 
-  const [asset, setAsset] = useState<(typeof ASSETS)[number]>('*')
-  const [kind, setKind] = useState<(typeof KINDS)[number]>('*')
+  const [asset, setAsset] = useState('*')
+  const [kind, setKind] = useState('*')
   const [symRaw, setSymRaw] = useState('')
   const sym = symRaw.toUpperCase().replace(/[^A-Z0-9*]/g, '') || '*'
-  const allWild = asset === '*' && kind === '*' && sym === '*'
-  const sub = allWild ? 'md/>' : `md/${asset}/*/${sym}/${kind}`
+  const sub = subscriptionFor(sc, asset, kind, sym)
 
-  const logRef = useRef<LogView>(emptyLogs())
+  const logRef = useRef<LogView>(emptyLogs(topics))
+  const recId = useRef(0) // survives restarts so row keys never repeat
+  const partCounts = useRef<Record<string, number[]>>({})
   const mapBuf = useRef<MapRow[]>([])
   const rowBuf = useRef<KRec[]>([])
   const counts = useRef({ kafka: 0, delivered: 0, sec: 0 })
 
+  // A new key or partition count starts fresh logs, like re-creating the topic.
+  useEffect(() => {
+    logRef.current = emptyLogs(topics)
+    partCounts.current = Object.fromEntries(topics.map((k) => [k.name, Array(k.partitions).fill(0)]))
+    setLogs(structuredClone(logRef.current))
+  }, [topics])
+
   // Producer → Kafka log → bridge → Solace bus. Only runs while on screen.
   useEffect(() => {
     if (!inView) return
-    let id = 0, t = 0
-    const offsets = new Map(KTOPICS.map((k) => [k.name, 1_840_000 + Math.floor(Math.random() * 90_000)]))
+    let t = 0
+    const offsets = new Map(topics.map((k) => [k.name, 1_840_000 + Math.floor(Math.random() * 90_000)]))
     const loop = () => {
+      if (isPaused()) { t = window.setTimeout(loop, 200); return }
       const burst = 1 + Math.floor(Math.random() * 2)
       for (let n = 0; n < burst; n++) {
-        const i = INSTRUMENTS[Math.floor(Math.random() * INSTRUMENTS.length)]
-        const k: Kind = Math.random() < 0.62 ? 'quote' : 'trade'
-        const topic = kafkaTopicFor(k)
-        const parts = KTOPICS.find((x) => x.name === topic)!.parts
-        const part = hash(i.sym) % parts
-        const offset = offsets.get(topic)! + 1
-        offsets.set(topic, offset)
-        const px = i.px * (1 + (Math.random() - 0.5) * i.vol)
-        const spread = px * 0.00005 + Math.pow(10, -i.dp)
-        const rec: KRec = {
-          id: id++, topic, part, offset, headers: { asset: i.asset, venue: i.venue, sym: i.sym }, sym: i.sym, asset: i.asset, venue: i.venue, kind: k,
-          bid: px - spread / 2, ask: px + spread / 2, px, dp: i.dp, ts: Date.now(),
-          size: Math.ceil(Math.random() * 50) * (i.asset === 'equities' ? 100 : 1),
-        }
+        const { index } = pickTopic(sc)
+        const kt = topics[index]
+        const rec = makeRecord(sc, pick(sc.model.entities), kt, index, recId.current++)
+        partCounts.current[kt.name][rec.part]++
+        const offset = offsets.get(kt.name)! + 1
+        offsets.set(kt.name, offset)
+        rec.offset = offset
         // 1. append to the flat Kafka topic
-        const lv = logRef.current[topic]
+        const lv = logRef.current[kt.name]
         lv.offset = offset
-        lv.parts[part] = [...lv.parts[part], { id: rec.id, key: rec.sym }].slice(-LOG_LEN)
+        lv.parts[rec.part] = [...lv.parts[rec.part], { id: rec.id, key: rec.key }].slice(-LOG_LEN)
         counts.current.kafka++; counts.current.sec++
         // 2. in-broker bridge maps Kafka topic + headers onto a hierarchical Solace topic
-        const h = rec.headers
-        const to = solaceTopic(topic, h)
-        mapBuf.current.push({ id: rec.id, from: `${topic}·p${part}·@${offset.toLocaleString()}`, hdr: `asset=${h.asset} venue=${h.venue} sym=${h.sym}`, to })
-        bus.publish(to, rec)
+        mapBuf.current.push({ id: rec.id, from: `${kt.name}·p${rec.part}·@${offset.toLocaleString()}`, hdr: Object.entries(rec.headers).map(([k, v]) => `${k}=${v}`).join(' '), to: rec.solaceTopic })
+        bus.publish(rec.solaceTopic, rec)
       }
-      t = window.setTimeout(loop, 320 + Math.random() * 280)
+      t = window.setTimeout(loop, scaled(320 + Math.random() * 280))
     }
     loop()
     return () => clearTimeout(t)
-  }, [inView])
+  }, [inView, sc, topics])
 
   // Blotter: a broker-side subscription; re-subscribes whenever a filter changes.
   useEffect(() => {
@@ -134,24 +165,33 @@ export default function KafkaBridge() {
   const filtered = stats.kafka ? Math.max(0, (1 - stats.delivered / stats.kafka) * 100) : 0
 
   return (
-    <section id="kafka" className="fit" ref={ref}>
-      <div className="wrap">
-        <SectionHead
-          split
-          eyebrow="07 · Kafka bridge"
-          title={<>Kafka in. <span className="grad">Precise streams</span> out.</>}
-          lede={<>Market data lands on flat Kafka topics. The Kafka bridge is integrated inside the Solace broker — no separate connector to run. It builds a hierarchical Solace topic from just the Kafka topic name and record headers, passing the payload through untouched — so each trader UI subscribes to just the asset class, symbol or event type it needs, filtered in the broker and pushed straight to the glass.</>}
-        />
+    <div ref={ref} data-pane="bridge">
+        {sc.copy.kafka?.extra && <p className="lede kb-intro">{renderRich(sc.copy.kafka.extra)}</p>}
         <Reveal delay={0.1}>
           <div className="kb-grid">
             {/* 1 · Kafka cluster */}
             <div className="panel kb-col">
               <div className="bl-h"><span className="kb-k">K</span>KAFKA CLUSTER <em className="mono">flat topics</em></div>
-              <div className="kb-topics mono">
-                {KTOPICS.map((t) => (
+              <div className="kb-ctl mono">
+                <div className="kb-frow">
+                  <label>KEY</label>
+                  {keyOptions.map((o) => (
+                    <button key={o.header} data-key={o.header} className={`chip ${o.field === keyField ? 'on' : ''}`} onClick={() => setKey(o.field === base[0].keyBy ? null : o.field)}>{o.header}</button>
+                  ))}
+                </div>
+                <div className="kb-frow">
+                  <label>PARTS</label>
+                  <button className="chip" data-parts="dec" aria-label="Fewer partitions" disabled={!canShrink} onClick={() => setParts((d) => d - 1)}>−</button>
+                  <b className="kb-pn">{partCount}</b>
+                  <button className="chip" data-parts="inc" aria-label="More partitions" disabled={!canGrow} onClick={() => setParts((d) => d + 1)}>+</button>
+                  <span className="kb-hint">each topic · hash(key) % partitions</span>
+                </div>
+              </div>
+              <div className="kb-topics mono" style={totalRows > 14 ? { ['--kb-prow' as string]: `${Math.max(9, Math.floor(280 / totalRows))}px` } : undefined}>
+                {topics.map((t) => (
                   <div key={t.name} className="kb-topic">
-                    <div className="kb-th"><b>{t.name}</b><span>{t.parts}p</span><em>@{logs[t.name].offset.toLocaleString()}</em></div>
-                    {logs[t.name].parts.map((p, pi) => (
+                    <div className="kb-th"><b>{t.name}</b><span>{t.partitions}p</span><span className="kb-skew">{skew(partCounts.current[t.name])}</span><em>@{logs[t.name]?.offset.toLocaleString()}</em></div>
+                    {(logs[t.name]?.parts ?? []).map((p, pi) => (
                       <div key={pi} className="kb-part">
                         <span>P{pi}</span>
                         <div className="kb-log">
@@ -168,7 +208,7 @@ export default function KafkaBridge() {
                 ))}
               </div>
               <div className="kb-rec mono">
-                <span>RECORD</span><em>topic</em><em>key=SYM</em><em className="on">headers</em><em className="off">value</em>
+                <span>RECORD</span><em>topic</em><em>key={keyName}</em><em className="on">headers</em><em className="off">value</em>
               </div>
             </div>
 
@@ -183,9 +223,11 @@ export default function KafkaBridge() {
                   <b>{rate.toLocaleString()}</b><span>records / sec bridged</span>
                 </div>
                 <div className="kb-rule mono">
-                  <div><em>reads</em><b>topic</b> mktdata.<b>{'{type}'}</b> + <b>headers</b></div>
+                  <div><em>reads</em><b>topic</b> {prefix}<b>{'{type}'}</b> + <b>headers</b></div>
                   <div className="kb-arrow">↓ topic name + headers only · payload untouched ↓</div>
-                  <div><em>solace</em>md/<b>{'{hdr.asset}'}</b>/<b>{'{hdr.venue}'}</b>/<b>{'{hdr.sym}'}</b>/<b>{'{type}'}</b></div>
+                  <div><em>solace</em>{sc.kafka.bridge.segments.map((seg, i) => (
+                    <span key={i}>{i > 0 && '/'}{'literal' in seg ? seg.literal : <b>{'header' in seg ? `{hdr.${seg.header}}` : '{type}'}</b>}</span>
+                  ))}</div>
                 </div>
                 <div className="kb-maps mono">
                   <AnimatePresence initial={false} mode="popLayout">
@@ -207,21 +249,21 @@ export default function KafkaBridge() {
 
             {/* 3 · Trader blotter */}
             <div className="panel kb-col kb-blotter">
-              <div className="bl-h"><span className="live" />MARKET DATA BLOTTER <em className="mono">WebSocket</em></div>
-              <div className="kb-filters">
+              <div className="bl-h"><span className="live" />{sc.title.toUpperCase()} STREAM <em className="mono">WebSocket</em></div>
+              <div className="kb-filters" style={{ ['--kb-lbl' as string]: `${Math.max(42, 7 * Math.max(ui.chipLabel.length, ui.typeLabel.length) + 2)}px` }}>
                 <div className="kb-frow">
-                  <label className="mono">ASSET</label>
-                  {ASSETS.map((a) => (
-                    <button key={a} className={`chip ${asset === a ? 'on' : ''}`} onClick={() => setAsset(a)}>{a === '*' ? 'ALL' : a.toUpperCase()}</button>
+                  <label className="mono">{ui.chipLabel}</label>
+                  {[{ id: '*', label: 'ALL' }, ...ui.chips].map((c) => (
+                    <button key={c.id} className={`chip ${asset === c.id ? 'on' : ''}`} onClick={() => setAsset(c.id)}>{c.id === '*' ? 'ALL' : c.label.toUpperCase()}</button>
                   ))}
                 </div>
                 <div className="kb-frow">
-                  <label className="mono">TYPE</label>
-                  {KINDS.map((k) => (
+                  <label className="mono">{ui.typeLabel}</label>
+                  {kinds.map((k) => (
                     <button key={k} className={`chip ${kind === k ? 'on' : ''}`} onClick={() => setKind(k)}>{k === '*' ? 'ALL' : k.toUpperCase()}</button>
                   ))}
-                  <label className="mono kb-symlbl">SYM</label>
-                  <input className="kb-sym mono" value={symRaw} onChange={(e) => setSymRaw(e.target.value)} placeholder="* or N*" spellCheck={false} aria-label="Symbol filter" />
+                  <label className="mono kb-symlbl">{ui.idLabel}</label>
+                  <input className="kb-sym mono" value={symRaw} onChange={(e) => setSymRaw(e.target.value)} placeholder={ui.idPlaceholder} spellCheck={false} aria-label={`${ui.idLabel} filter`} />
                 </div>
                 <div className="kb-sub mono"><span>SUBSCRIPTION</span><code>{sub}</code></div>
               </div>
@@ -231,18 +273,18 @@ export default function KafkaBridge() {
                 <div><b>{filtered.toFixed(1)}%</b><span>filtered at broker</span></div>
               </div>
               <div className="kb-table mono">
-                <div className="kb-row kb-head"><span>TIME</span><span>SYM</span><span className="hide-s">VENUE</span><span>TYPE</span><span>PRICE</span><span>SIZE</span></div>
-                <AnimatePresence initial={false} mode="popLayout">
+                <div className="kb-row kb-head"><span>TIME</span><span>{ui.idLabel}</span><span className="hide-s">{ui.originLabel}</span><span>{ui.typeLabel}</span><span>{ui.valueLabel}</span><span>{ui.extra.label}</span></div>
+                <AnimatePresence key={sub} initial={false} mode="popLayout">
                   {rows.map((r) => (
                     <motion.div key={r.id} layout initial={{ opacity: 0, y: -14, backgroundColor: 'rgba(42,183,255,0.22)' }}
                       animate={{ opacity: 1, y: 0, backgroundColor: 'rgba(0,0,0,0)' }} exit={{ opacity: 0 }}
                       transition={{ duration: 0.8 }} className="kb-row">
                       <span className="muted">{clock(r.ts)}</span>
-                      <span><b>{r.sym}</b></span>
-                      <span className="hide-s muted">{r.venue}</span>
-                      <span><em className={`status ${r.kind === 'trade' ? 's-part' : 's-new'}`}>{r.kind.toUpperCase()}</em></span>
-                      <span>{r.kind === 'trade' ? fmt(r.px, r.dp) : <>{fmt(r.bid, r.dp)} <i className="muted">/</i> {fmt(r.ask, r.dp)}</>}</span>
-                      <span>{r.size.toLocaleString()}</span>
+                      <span><b>{r.entityId}</b></span>
+                      <span className="hide-s muted">{r.origin}</span>
+                      <span><em className={`status ${KIND_CLS[r.kindIndex] ?? 's-ack'}`}>{r.kind.toUpperCase()}</em></span>
+                      <span><Value r={r} render={topics[r.kindIndex].render} /></span>
+                      <span>{ui.extra.header ? r.headers[ui.extra.header] : r.size.toLocaleString()}</span>
                     </motion.div>
                   ))}
                 </AnimatePresence>
@@ -251,7 +293,6 @@ export default function KafkaBridge() {
             </div>
           </div>
         </Reveal>
-      </div>
-    </section>
+    </div>
   )
 }

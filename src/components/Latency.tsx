@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { LATENCY } from '../content'
 import { useThemeValue } from '../lib/theme'
-import { SectionHead, Reveal } from './Section'
+import { ScenarioHead, Reveal } from './Section'
 
 // log-normal sampler matched to a median and p99
 function sampler(median: number, p99: number) {
@@ -99,12 +99,7 @@ export default function Latency() {
   return (
     <section id="latency" className="fit">
       <div className="wrap">
-        <SectionHead
-          split
-          eyebrow="03 · Low latency"
-          title={<>Microseconds, <span className="grad">deterministically</span>.</>}
-          lede="When the alpha decays in microseconds, jitter is the enemy. Solace delivers low, flat, predictable latency — the tail matters as much as the median."
-        />
+        <ScenarioHead id="latency" split />
         <Reveal delay={0.1}>
           <div className="lat-grid">
             <div className="panel lat-chart">

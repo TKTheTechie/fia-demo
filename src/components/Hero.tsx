@@ -1,7 +1,9 @@
 import { motion } from 'framer-motion'
 import { Component, ReactNode, Suspense, lazy, useEffect, useState } from 'react'
-import { CLIENTS, HERO } from '../content'
 import { broker } from '../lib/broker'
+import { useScenario } from '../lib/scenario'
+import { stageSubscription } from '../lib/sim/lifecycle'
+import type { Scenario } from '../scenarios/types'
 
 const HeroScene = lazy(() => import('./HeroScene'))
 
@@ -13,11 +15,11 @@ class SceneBoundary extends Component<{ children: ReactNode }, { failed: boolean
   render() { return this.state.failed ? null : this.props.children }
 }
 
-function useLiveStats() {
+function useLiveStats(sc: Scenario) {
   const [s, setS] = useState({ rate: 0, total: 0, orders: 0 })
   useEffect(() => {
     let lastN = broker.published, lastT = performance.now(), orders = 0
-    const un = broker.subscribe('trade/oms/new/>', () => orders++)
+    const un = broker.subscribe(stageSubscription(sc, sc.lifecycle.stages[0].id), () => orders++)
     const iv = setInterval(() => {
       const now = performance.now()
       const rate = ((broker.published - lastN) / (now - lastT)) * 1000
@@ -25,12 +27,15 @@ function useLiveStats() {
       setS({ rate, total: broker.published, orders })
     }, 500)
     return () => { un(); clearInterval(iv) }
-  }, [])
+  }, [sc])
   return s
 }
 
 export default function Hero() {
-  const s = useLiveStats()
+  const sc = useScenario()
+  const HERO = sc.hero
+  const clients = HERO.clients
+  const s = useLiveStats(sc)
   return (
     <section className="hero" id="top">
       <div className="hero-canvas">
@@ -61,21 +66,23 @@ export default function Hero() {
         <motion.div className="hero-stats" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.8, duration: 0.8 }}>
           <div className="stat"><b>{s.rate.toFixed(0)}</b><span>events / sec on this page</span></div>
           <div className="stat"><b>{s.total.toLocaleString()}</b><span>events routed</span></div>
-          <div className="stat"><b>{s.orders.toLocaleString()}</b><span>orders through the mesh</span></div>
+          <div className="stat"><b>{s.orders.toLocaleString()}</b><span>{sc.lifecycle.noun}s through the mesh</span></div>
         </motion.div>
       </div>
-      <motion.div className="clients" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 1.1, duration: 1 }}>
-        <div className="clients-label mono">Trusted by leading banks &amp; exchanges</div>
-        <div className="clients-window">
-          <div className="clients-track">
-            {[...CLIENTS, ...CLIENTS].map((c, i) => (
-              <div key={i} className={`client ${c.serif ? 'serif' : ''}`} title={c.name} aria-hidden={i >= CLIENTS.length}>
-                {c.logo ? <img src={c.logo} alt={c.name} /> : c.short ?? c.name}
-              </div>
-            ))}
+      {clients && (
+        <motion.div className="clients" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 1.1, duration: 1 }}>
+          <div className="clients-label mono">{clients.label}</div>
+          <div className="clients-window">
+            <div className="clients-track">
+              {[...clients.items, ...clients.items].map((c, i) => (
+                <div key={i} className={`client ${c.serif ? 'serif' : ''}`} title={c.name} aria-hidden={i >= clients.items.length}>
+                  {c.logo ? <img src={c.logo} alt={c.name} /> : c.short ?? c.name}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      </motion.div>
+        </motion.div>
+      )}
     </section>
   )
 }

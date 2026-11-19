@@ -1,12 +1,6 @@
-// All marketing claims live here so they can be checked against current
-// Solace collateral before the booth goes live. Edit freely.
-
-export const HERO = {
-  eyebrow: 'FIA Expo · Chicago',
-  title: ['The event mesh', 'that moves markets.'],
-  lede:
-    'Solace connects every feed handler, OMS, EMS, risk engine and trader UI — across colos, data centers and clouds — with one intelligent, topic-routed event mesh.',
-}
+// Scenario-independent copy: the Solace product claims shared by every scenario.
+// Domain copy (hero, section titles, ledes) lives in each scenario under src/scenarios/.
+// Check these against current Solace collateral before a booth or demo goes live.
 
 export const LATENCY = {
   // illustrative distribution params (microseconds), one row per deployment form
@@ -56,20 +50,3 @@ export const FORM_FACTORS = [
 ]
 
 export const PROTOCOLS = ['SMF', 'MQTT', 'AMQP', 'JMS', 'REST', 'WebSocket', 'Kafka bridge', 'OpenTelemetry']
-
-// Client strip on the opening screen. Each entry renders as a styled wordmark;
-// set `logo` to a file in /public (e.g. 'logos/jpm.svg') to show an official
-// logo instead. Confirm with marketing that each name may be shown publicly.
-export type Client = { name: string; short?: string; logo?: string; serif?: boolean }
-
-export const CLIENTS: Client[] = [
-  { name: 'J.P. Morgan', serif: true },
-  { name: 'Citi' },
-  { name: 'Wells Fargo', serif: true },
-  { name: 'TMX Group' },
-  { name: 'Korea Exchange', short: 'KRX' },
-  { name: 'National Stock Exchange of India', short: 'NSE' },
-  { name: 'BSE' },
-  { name: 'RBC', serif: true },
-  { name: 'CIBC' },
-]

@@ -1,0 +1,196 @@
+{
+  "scenario": "capital-markets",
+  "sections": [
+    "top",
+    "flow",
+    "topics",
+    "latency",
+    "wan",
+    "throughput",
+    "hybrid",
+    "kafka",
+    "global",
+    "blotter"
+  ],
+  "counts": {
+    "page": {
+      ".nav-links a": 9,
+      ".tape-item": 24,
+      "section.fit": 9
+    },
+    "top": {
+      "h1": 1,
+      ".hero-stats .stat": 3,
+      ".clients-track .client": 18
+    },
+    "flow": {
+      ".arch-node": 12
+    },
+    "topics": {
+      ".presets .chip": 7
+    },
+    "latency": {
+      ".lat-card": 3
+    },
+    "wan": {
+      ".wan-hub": 11,
+      ".wan-arc": 15
+    },
+    "throughput": {
+      ".tp-slider input": 1,
+      ".tp-tags .chip": 5
+    },
+    "hybrid": {
+      ".ff-card": 4,
+      ".proto": 16
+    },
+    "kafka": {
+      ".kb-topic": 2,
+      ".kb-part": 14
+    },
+    "global": {
+      ".gd-desk": 6,
+      ".gd-hub": 11,
+      ".gd-hub.desk": 6,
+      ".gd-arc": 15
+    },
+    "blotter": {
+      ".mw tbody tr": 12,
+      ".desk-chips .chip": 6
+    }
+  },
+  "soft": {
+    "top": {
+      ".hero-canvas canvas": 1
+    }
+  },
+  "live": {
+    "top": [
+      {
+        "sel": ".hero-stats .stat:nth-child(1) b",
+        "minNumber": 1,
+        "what": "events/sec on this page"
+      },
+      {
+        "sel": ".hero-stats .stat:nth-child(3) b",
+        "minNumber": 1,
+        "what": "orders through the mesh"
+      }
+    ],
+    "flow": [
+      {
+        "sel": ".arch-log-row",
+        "minCount": 3,
+        "what": "live topic log"
+      },
+      {
+        "sel": ".arch-svg circle[filter]",
+        "minCount": 1,
+        "what": "particles on the bus"
+      }
+    ],
+    "topics": [
+      {
+        "sel": ".topic-stats > div:nth-child(1) b",
+        "minNumber": 10,
+        "what": "events seen"
+      },
+      {
+        "sel": ".srow.hit",
+        "minCount": 1,
+        "what": "delivered rows for the default subscription"
+      }
+    ],
+    "latency": [
+      {
+        "sel": ".lat-card:nth-child(1) .lat-nums div:nth-child(1) b",
+        "notText": "\u2014",
+        "what": "p50 computed"
+      }
+    ],
+    "wan": [
+      {
+        "sel": ".wan-hud > div:nth-child(2) b",
+        "minNumber": 1,
+        "what": "events across WAN"
+      }
+    ],
+    "throughput": [
+      {
+        "sel": ".tp-count span",
+        "minNumber": 1000,
+        "what": "msgs/sec counter"
+      }
+    ],
+    "kafka": [
+      {
+        "sel": ".kb-row:not(.kb-head)",
+        "minCount": 1,
+        "what": "blotter rows"
+      },
+      {
+        "sel": ".kb-kpis div:nth-child(1) b",
+        "minNumber": 1,
+        "what": "records on Kafka"
+      },
+      {
+        "sel": ".kb-map",
+        "minCount": 1,
+        "what": "bridge mappings"
+      }
+    ],
+    "global": [
+      {
+        "sel": ".gd-row",
+        "minCount": 1,
+        "what": "desk rows"
+      },
+      {
+        "sel": ".gd-stats div:nth-child(2) b",
+        "minNumber": 1,
+        "what": "events delivered"
+      }
+    ],
+    "blotter": [
+      {
+        "sel": ".ob-row:not(.ob-head)",
+        "minCount": 1,
+        "what": "order rows"
+      },
+      {
+        "sel": ".mw tbody td[colspan]",
+        "maxCount": 0,
+        "what": "every instrument has a quote"
+      }
+    ]
+  },
+  "interact": {
+    "topicRouting": {
+      "sub": "md/fx/>",
+      "everyDeliveredContains": "md/fx/"
+    },
+    "kafka": {
+      "chip": "FUTURES",
+      "expectSub": "md/futures/*/*/*",
+      "allowedVenues": [
+        "CME",
+        "CBOT",
+        "NYMEX",
+        "COMEX"
+      ],
+      "keyChip": "venue",
+      "topics": 2
+    },
+    "throughput": {
+      "slider": 20,
+      "expectApprox": 2400000,
+      "tolerance": 0.08
+    },
+    "blotter": {
+      "chip": "ALGO",
+      "expectSub": "trade/*/*/ALGO/>",
+      "deskColumn": 4
+    }
+  },
+  "ignoreConsole": []
+}

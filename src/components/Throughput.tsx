@@ -1,7 +1,7 @@
 import { animate, useInView } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
 import { THROUGHPUT } from '../content'
-import { SectionHead, Reveal } from './Section'
+import { ScenarioHead, Reveal } from './Section'
 
 // Visual load generator: a particle stream whose density follows the slider.
 export default function Throughput() {
@@ -85,12 +85,7 @@ export default function Throughput() {
   return (
     <section id="throughput" className="fit">
       <div className="wrap">
-        <SectionHead
-          split
-          eyebrow="05 · Throughput"
-          title={<><span className="grad">{THROUGHPUT.headline}</span>, without breaking a sweat.</>}
-          lede="Open, close, a Fed announcement, an index rebalance — market data bursts are where messaging falls over. Solace absorbs the burst, protects slow consumers, and keeps the fast path fast. Drag the slider to push the load."
-        />
+        <ScenarioHead id="throughput" split />
         <Reveal delay={0.1}>
           <div className="panel tp">
             <canvas ref={canvas} className="tp-canvas" />
